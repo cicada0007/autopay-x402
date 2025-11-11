@@ -1,0 +1,309 @@
+name: CI/CD Pipeline on Push
+
+on:
+  push:
+    branches: [ main, develop, feature/* ]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - 'README.md'
+  pull_request:
+    branches: [ main ]
+
+env:
+  NODE_VERSION: '20'
+  SOLANA_VERSION: '1.18.11'
+  PROJECT_NAME: 'autopay-agent-for-x402-autonomous-payments-on-solana'
+  DEVNET_RPC: 'https://api.devnet.solana.com'
+  COINBASE_FACILITATOR_API_KEY: ${{ secrets.COINBASE_FACILITATOR_API_KEY }}
+  PHANTOM_SESSION_SECRET: ${{ secrets.PHANTOM_SESSION_SECRET }}
+  ENCRYPTION_KEY: ${{ secrets.AES_256_ENCRYPTION_KEY }}
+
+jobs:
+  lint-and-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+
+      - name: Install dependencies
+        run: |
+          npm ci --frozen-lockfile
+          # Install Solana CLI for Devnet verification
+          sh -c "$(curl -sSfL https://release.solana.com/${{ env.SOLANA_VERSION }}/install)"
+          export PATH="/home/runner/.local/share/solana/install/active_release/bin:$PATH"
+
+      - name: Lint TypeScript code
+        run: |
+          npm run lint
+          # Custom lint for x402-specific files (e.g., payment parsers)
+          npx eslint --config .eslintrc.x402.js src/agent/payment-parser.ts src/integrations/coinbase-facilitator.ts
+
+      - name: TypeScript type checking
+        run: |
+          npx tsc --noEmit --project tsconfig.json
+          # Additional check for Solana/web3.js integrations
+          npx tsc --noEmit --project tsconfig.solana.json
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    strategy:
+      matrix:
+        include:
+          - suite: unit
+          - suite: integration
+          - suite: e2e-simulated
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js and Solana
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies and Solana tools
+        run: |
+          npm ci
+          sh -c "$(curl -sSfL https://release.solana.com/${{ env.SOLANA_VERSION }}/install)"
+          export PATH="/home/runner/.local/share/solana/install/active_release/bin:$PATH"
+          # Setup Devnet wallet for testing (air-gapped, no real funds)
+          solana-keygen new --no-bip39-passphrase --outfile ~/.config/solana/test-wallet.json --silent
+          solana config set --url ${{ env.DEVNET_RPC }}
+
+      - name: Run tests
+        env:
+          TEST_SUITE: ${{ matrix.suite }}
+          JEST_JUNIT_OUTPUT_DIR: coverage
+        run: |
+          if [ "${{ matrix.suite }}" = "unit" ]; then
+            npm run test:unit -- --coverage --ci
+          elif [ "${{ matrix.suite }}" = "integration" ]; then
+            # Integration tests for Phantom CASH simulation and x402 parsing
+            npm run test:integration -- --runInBand --detectOpenHandles
+            # Verify Coinbase Facilitator API mock responses
+            npm run test:facilitator -- --env=ci
+          elif [ "${{ matrix.suite }}" = "e2e-simulated" ]; then
+            # Simulated E2E for Market Data API and Knowledge Data API flows
+            # Uses Postman Newman for API route simulations on Devnet
+            npm install -g newman newman-reporter-junit
+            newman run postman/x402-e2e-flows.json -e postman/devnet-environment.json --reporters cli,junit --reporter-junit-export coverage/e2e-report.xml
+            # Custom E2E for autonomous agent retry logic
+            npm run test:e2e-agent -- --simulate-payments --solana-devnet
+          fi
+
+      - name: Upload test coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage/lcov.info
+          flags: ${{ matrix.suite }}
+          name: codecov-${{ matrix.suite }}
+          fail_ci_if_error: true
+
+      - name: Audit trail validation
+        if: matrix.suite == 'e2e-simulated'
+        run: |
+          # Validate JSON ledger for transaction logs in simulated failures
+          node scripts/validate-audit-trail.js --path ./test-ledger.json --check-duplicates --verify-encryption
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Next.js frontend
+        run: |
+          npm run build:frontend
+          # Ensure TailwindCSS and Zustand state for payment visualization is optimized
+          npm run analyze-bundle --frontend
+
+      - name: Build backend (Node.js agent)
+        env:
+          NODE_ENV: production
+        run: |
+          npm run build:backend
+          # Compile TypeScript for x402 SDK and Solana integrations
+          npx tsc --project tsconfig.backend.json
+          # Bundle agent logic with esbuild for faster deployment
+          npx esbuild src/agent/autopay-agent.ts --bundle --platform=node --outfile=dist/agent-bundle.js --external:solana/web3.js --external:@coinbase/x402-sdk
+
+      - name: Verify Solana program stubs (if applicable)
+        run: |
+          # Placeholder for future Rust Solana programs; for now, validate JS bindings
+          npm run verify:solana-bindings --devnet
+
+      - name: Artifact build outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            dist/
+            .next/
+            src/agent/compiled/
+          retention-days: 5
+
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Snyk security scan
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high --fail-on-issues=true
+          # Focus on dependencies like solana/web3.js and @coinbase/x402-sdk
+          command: test --file=package.json
+
+      - name: Secret scanning for Phantom and Coinbase integrations
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: HEAD~1
+          head: HEAD
+          extra_args: --exclude-paths .trufflehog-ignore.txt --config .trufflehog-config.json
+          # Custom config to flag AES-256 keys and session tokens
+
+      - name: Dependency audit for blockchain libs
+        run: |
+          npm audit --audit-level=high
+          # Specific audit for Solana ecosystem vulnerabilities
+          npm audit --registry https://registry.npmjs.org --package-lock-only
+
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: [build, security-scan]
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: ./dist
+
+      - name: Deploy to Vercel (Frontend)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: ./frontend
+          scope: ${{ secrets.VERCEL_ORG_ID }}
+        env:
+          VERCEL_ENV: staging
+
+      - name: Deploy backend to Render (Agent API)
+        uses: johnbeynon/render-deploy-action@v0.0.8
+        with:
+          service-id: ${{ secrets.RENDER_SERVICE_ID }}
+          api-key: ${{ secrets.RENDER_API_KEY }}
+          runtime: node
+          build-command: npm run build:backend
+          start-command: npm start -- --env=staging --solana-devnet
+        env:
+          RENDER_ENV: staging
+          SOLANA_RPC_URL: ${{ env.DEVNET_RPC }}
+
+      - name: Post-deploy verification (x402 flow)
+        run: |
+          # Smoke test: Simulate 402 response and agent payment on staging
+          curl -X POST https://staging-api.${{ env.PROJECT_NAME }}.vercel.app/api/simulate-402 \
+            -H "Content-Type: application/json" \
+            -d '{"endpoint": "/api/market-feed", "wallet": "test-devnet-wallet"}'
+          # Check audit trail endpoint for logged transactions
+          curl https://staging-api.${{ env.PROJECT_NAME }}.vercel.app/api/audit-trail --fail
+
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: [build, security-scan]
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: ./dist
+
+      - name: Deploy to Vercel (Frontend - Prod)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID_PROD }}
+          working-directory: ./frontend
+          scope: ${{ secrets.VERCEL_ORG_ID }}
+          args: --prod
+        env:
+          VERCEL_ENV: production
+
+      - name: Deploy backend to Render (Prod Agent)
+        uses: johnbeynon/render-deploy-action@v0.0.8
+        with:
+          service-id: ${{ secrets.RENDER_SERVICE_ID_PROD }}
+          api-key: ${{ secrets.RENDER_API_KEY }}
+          runtime: node
+          build-command: npm run build:backend
+          start-command: npm start -- --env=production --solana-devnet --autonomy=full
+        env:
+          RENDER_ENV: production
+          SOLANA_RPC_URL: ${{ env.DEVNET_RPC }}
+          # Prod-specific: Enable multi-API monitoring and balance checks
+
+      - name: Notify on successful deploy
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          fields: repo,message,commit,author,action,eventName,ref,workflow
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        if: always()
+
+  notify-failure:
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck, test, build, security-scan, deploy-staging, deploy-production]
+    if: failure()
+    steps:
+      - name: Send failure notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          fields: repo,message,commit,author,action,eventName,ref,workflow,job,took
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+  pull-requests: write
+
+# Unique workflow identifier for this project
+workflow_id: 1762841338038_autopay_agent_for_x402_autonomous_payments_on_solana__meta_github_push_yaml_xyz74b

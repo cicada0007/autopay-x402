@@ -1,0 +1,44 @@
+{
+  "name": "autopay-agent-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Workspace for the Autopay Agent for x402 autonomous payments on Solana.",
+  "workspaces": [
+    "apps/backend",
+    "apps/frontend"
+  ],
+  "scripts": {
+    "clean": "rimraf node_modules apps/**/node_modules apps/**/dist",
+    "format": "prettier --write \"{apps,docs,infra,db,frontend,backend}/**/*.{ts,tsx,js,json,md,css}\"",
+    "lint": "npm run lint --workspace backend && npm run lint --workspace frontend",
+    "test": "npm run test --workspace backend && npm run test --workspace frontend",
+    "dev": "concurrently \"npm run dev --workspace backend\" \"npm run dev --workspace frontend\"",
+    "build": "npm run build --workspace backend && npm run build --workspace frontend",
+    "prisma:generate": "npm run prisma:generate --workspace backend",
+    "prisma:migrate": "npm run prisma:migrate --workspace backend"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "concurrently": "^8.2.2",
+    "prettier": "^3.1.1",
+    "rimraf": "^5.0.5",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=9.0.0"
+  },
+  "keywords": [
+    "solana",
+    "x402",
+    "autonomous-payments",
+    "phantom",
+    "nextjs",
+    "express",
+    "prisma",
+    "typescript"
+  ],
+  "author": "Autopay Agent Contributors",
+  "license": "MIT"
+}
+

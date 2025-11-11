@@ -1,0 +1,54 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model AgentRequest {
+  id             String   @id @default(cuid())
+  endpoint       String
+  status         String   @default("PAYMENT_REQUIRED")
+  retryCount     Int      @default(0)
+  amount         Decimal  @default(0)
+  currency       String
+  facilitatorUrl String
+  paymentHash    String?  @unique
+  metadata       String?
+  responseData   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  payments       Payment[]
+  auditLogs      AuditLog[]
+}
+
+model Payment {
+  id          String   @id @default(cuid())
+  requestId   String
+  request     AgentRequest @relation(fields: [requestId], references: [id])
+  txHash      String   @unique
+  amount      Decimal
+  currency    String
+  status      String   @default("PENDING")
+  confirmedAt DateTime?
+  failureCode String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  auditLogs   AuditLog[]
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  category   String
+  level      String   @default("INFO")
+  message    String
+  details    String?
+  requestId  String?
+  paymentId  String?
+  createdAt  DateTime @default(now())
+  request    AgentRequest? @relation(fields: [requestId], references: [id])
+  payment    Payment? @relation(fields: [paymentId], references: [id])
+}
+

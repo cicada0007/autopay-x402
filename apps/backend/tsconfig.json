@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "baseUrl": "src",
+    "types": ["node", "jest"],
+    "paths": {
+      "@config/*": ["config/*"],
+      "@controllers/*": ["controllers/*"],
+      "@middleware/*": ["middleware/*"],
+      "@services/*": ["services/*"],
+      "@routes/*": ["routes/*"],
+      "@utils/*": ["utils/*"],
+      "@agent/*": ["agent/*"],
+      "@types/*": ["types/*"],
+      "@db/*": ["db/*"]
+    }
+  },
+  "include": ["src", "prisma"],
+  "exclude": ["dist", "node_modules"]
+}
+

@@ -1,0 +1,87 @@
+You are an expert Frontend Developer specializing in Next.js applications with blockchain integrations. Your task is to generate complete, production-ready frontend code for the "Autopay Agent for x402 Autonomous Payments on Solana" project. This is a web application demonstrating an autonomous agent that detects HTTP 402 Payment Required responses from premium APIs, executes microtransactions using Phantom CASH on Solana Devnet, and retries API calls to access restricted data. The frontend must provide real-time visualization of the agent's activities, wallet interactions, and system status, enabling users (API developers, blockchain enthusiasts, hackathon participants, and researchers) to observe and interact with the x402 economy flow.
+
+### Project Overview
+- **Title**: Autopay Agent for x402 Autonomous Payments on Solana
+- **Description**: The application visualizes a fully autonomous system integrating with simulated premium APIs: 
+  - Market Data API (e.g., /api/market-feed for real-time crypto prices, arbitrage signals, sentiment metrics).
+  - Knowledge Data API (e.g., /api/ai-insights for curated AI research documentation).
+  These APIs return 402 responses with x402 payment instructions when accessed without payment. The agent automatically parses instructions, initiates Phantom wallet payments (using CASH or USDC on Solana Devnet), verifies via Coinbase's x402 Facilitator API, and retries requests. All data is hosted on Solana Devnet and served via Next.js API routes for observability.
+- **Target Users**: API developers monetizing via x402 microtransactions; blockchain builders exploring decentralized agent economies; hackathon demos of Solana payments; researchers in machine-to-machine transactions with AI/market data.
+- **Autonomy Levels** (UI must support switching via a config panel):
+  - Phase 1: Demo Mode – Server-hosted visualization of autonomous Node.js agent runs (logs, payments, retries).
+  - Phase 2: Interactive Mode – Browser-based, user-triggered payments with real-time Phantom wallet prompts.
+  - Phase 3: Full Autonomy – Multi-API monitoring dashboard with prioritization (e.g., based on funds, data freshness).
+- **Key Frontend Responsibilities**:
+  - Real-time UI for payment flows: Show 402 detection, payment initiation, Solana transaction status, and successful data access.
+  - Wallet integration: Secure Phantom connection with scoped permissions (transaction signing only), session keys for delegation (e.g., 1-hour/3-tx limits).
+  - Resilience visualization: Display retry attempts (up to 3 with exponential backoff), low-balance alerts (monitor Phantom/USDC Devnet balance < threshold, trigger top-up modals), circuit-breaker status for RPC/network issues, and queued payments.
+  - Audit trail: Interactive log viewer for JSON ledger (successful/failed transactions, hashes, timestamps).
+  - On-chain status: Integrate Solana/web3.js for live transaction tracking and balance queries.
+  - Security emphasis: UI feedback for encryption (AES-256), Devnet isolation, and Facilitator verification (WebSocket callbacks for confirmations).
+
+### Technical Stack and Constraints
+- **Framework**: Next.js 14+ (App Router) with TypeScript.
+- **Styling**: TailwindCSS for responsive, modern UI (dark/light themes; blockchain-inspired design with Solana gradients, e.g., purple/teal accents).
+- **State Management**: Zustand for lightweight global state (e.g., agent status, wallet connection, logs); avoid Redux unless for complex async flows.
+- **Blockchain Integration**:
+  - @solana/web3.js and @solana/wallet-adapter-react for Phantom wallet (Devnet only; request connect, signTransaction permissions).
+  - Phantom CASH/USDC handling: Use wallet-adapter for session keys and transaction simulation/previews.
+  - Real-time updates: Use WebSockets (via Next.js API routes or Pusher) for Facilitator API callbacks and Solana RPC subscriptions (e.g., connection.onLogs for tx confirmations).
+- **Backend Coordination** (Assume APIs from BackendDev; generate frontend fetches accordingly):
+  - Base URL: `/api` (Next.js routes).
+  - Endpoints:
+    - GET `/api/agent/status`: Current autonomy phase, balance, queued payments.
+    - POST `/api/simulate-request`: Trigger API call to premium endpoint (e.g., { endpoint: '/market-feed' }), returns 402 mock or paid data.
+    - GET `/api/logs`: Fetch JSON ledger entries (paginated, filter by success/failure).
+    - POST `/api/payment`: Initiate payment (body: { instructions: x402Payload, walletSig: string }), returns tx hash for tracking.
+    - WebSocket: `/api/ws/facilitator` for real-time verification (e.g., { event: 'payment_confirmed', hash: string }).
+  - Error handling: UI must gracefully handle 402, 429 (rate limits), or Solana RPC failures (e.g., toast notifications via react-hot-toast).
+- **Database/Storage**: No direct DB access; use localStorage for ephemeral session data (e.g., encrypted session keys); fetch ledger from backend.
+- **Testing/Accessibility**: Include ARIA labels, keyboard navigation; generate with ESLint/Prettier setup. Ensure mobile-responsive for demo purposes.
+- **Deployment**: Vercel-ready (static exports optional for Phase 1 demo); include environment vars like NEXT_PUBLIC_SOLANA_RPC (Devnet URL).
+- **Unique Project Elements**:
+  - Custom components for x402 flow: E.g., PaymentModal showing parsed instructions (amount, token, facilitator URL), animated retry spinner with backoff timer.
+  - Visualizations: Charts (via Recharts) for balance trends, tx history timeline; Solana explorer links for tx hashes.
+  - Security UI: Consent modals for Phantom delegation, balance warnings with "Top-up via Faucet" button (link to Solana Devnet faucet).
+
+### UI Structure and Pages/Components to Generate
+Generate a complete Next.js app structure under `/app` (App Router). Include all necessary files: pages, components, hooks, utils, and types. Ensure code is modular, typed, and error-resilient. Do not use external UI libs like Material-UI; stick to Tailwind.
+
+1. **Pages/Layouts**:
+   - `/app/layout.tsx`: Root layout with Tailwind globals, wallet provider (@solana/wallet-adapter), Zustand provider, theme toggle.
+   - `/app/page.tsx`: Dashboard home – Overview cards: Agent status (autonomy phase selector), current balance (real-time USDC/CASH), recent payments list, quick-trigger buttons for API simulations.
+   - `/app/payments/page.tsx`: Payment history page – Filterable table of txs (hash, amount, status, API endpoint), with modals for details (e.g., view raw x402 instructions).
+   - `/app/logs/page.tsx`: Audit trail viewer – Real-time log stream (successful/failed, errors classified), search/filter by timestamp/type; download JSON export.
+   - `/app/monitor/page.tsx`: Multi-API monitoring (Phase 3) – Grid of API cards (Market Data, Knowledge Data) showing freshness, last access, auto-prioritization based on funds (e.g., pause low-priority if balance < 0.01 SOL).
+   - `/app/config/page.tsx`: Settings page – Toggle autonomy modes, set retry thresholds, wallet reconnect, Devnet faucet integration.
+
+2. **Components** (in `/components`):
+   - `WalletConnectButton.tsx`: Custom Phantom connect/disconnect with status indicator (connected, loading, error).
+   - `PaymentFlowVisualizer.tsx`: Stepper component for 402 -> Payment -> Retry -> Data Access (use Framer Motion for animations).
+   - `BalanceMonitor.tsx`: Live balance display with low-balance modal (threshold: 0.001 USDC; include top-up instructions).
+   - `RetryHandler.tsx`: UI for exponential backoff (progress bar, "Retrying in X seconds"), up to 3 attempts.
+   - `TransactionTracker.tsx`: Card for live tx status (pending, confirmed, failed) with Solana explorer link and Facilitator verification badge.
+   - `ApiSimulator.tsx`: Form to select endpoint (Market/Knowledge), trigger request, show response (402 mock or paid data like { price: 123.45, sentiment: 'bullish' }).
+   - `LogEntry.tsx`: Reusable card for ledger items (timestamp, event, hash, error details if failed).
+   - `CircuitBreakerAlert.tsx`: Banner for network issues (e.g., "RPC paused – Queued 2 payments").
+
+3. **Hooks and Utils** (in `/hooks` and `/utils`):
+   - `useAgentStore.ts`: Zustand store for state (isAutonomous: boolean, balance: number, logs: array, payments: array).
+   - `usePhantomWallet.ts`: Custom hook for connection, signing, balance query (via getBalance on Devnet).
+   - `usePaymentInitiator.ts`: Hook to handle payment flow: Parse x402, create/sign tx with web3.js, post to backend, subscribe to confirmation.
+   - `useWebSocket.ts`: Hook for Facilitator WS (connect on mount, handle 'confirmed'/'failed' events, update store).
+   - `utils/x402Parser.ts`: TypeScript util to parse 402 headers (e.g., extract amount, token, facilitator from response).
+   - `utils/encryption.ts`: Helper for AES-256 session key storage in memory/localStorage (use crypto-js; warn user on persistence).
+
+4. **Types** (in `/types`):
+   - Define interfaces: e.g., X402Instructions { amount: string, token: 'CASH' | 'USDC', facilitator: string }, TransactionLog { hash: string, status: 'success' | 'failed', apiEndpoint: string, timestamp: Date, error?: string }.
+
+### Generation Guidelines
+- **Completeness**: Output the full file tree (e.g., // app/page.tsx\n[code]) with all imports, exports, and logic. Include package.json dependencies (e.g., "next": "^14", "@solana/web3.js": "^1.87", "@solana/wallet-adapter-react": "^0.15", "zustand": "^4", "tailwindcss": "^3", "framer-motion": "^10", "recharts": "^2", "react-hot-toast": "^2", "crypto-js": "^4").
+- **Production-Ready**: Add loading skeletons, error boundaries (via React ErrorBoundary), optimistic updates (e.g., mark payment as pending before confirmation). Ensure TypeScript strict mode; no console.logs in prod.
+- **Uniqueness to Project**: Incorporate Solana-specific visuals (e.g., phantom icon SVGs), x402 badges (e.g., "402 Detected" toast), and resilience demos (simulate failures via dev tools toggle).
+- **Edge Cases**: Handle wallet disconnects mid-payment (retry prompt), insufficient funds (pause agent, show faucet QR), network drops (offline indicator).
+- **Performance**: Use React.memo for lists, lazy-load charts; keep bundle small for Vercel deploys.
+- **Testing Hooks**: Include basic unit test stubs (e.g., in `__tests__/WalletConnectButton.test.tsx` using @testing-library/react).
+
+Generate the code now. Ensure it's self-contained, runnable with `npm install && npm run dev`, and aligns with backend APIs for seamless integration. Focus on intuitive UX that educates users on x402 autonomy.
