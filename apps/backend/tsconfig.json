@@ -11,6 +11,7 @@
       "@middleware/*": ["middleware/*"],
       "@services/*": ["services/*"],
       "@routes/*": ["routes/*"],
+      "@events/*": ["events/*"],
       "@utils/*": ["utils/*"],
       "@agent/*": ["agent/*"],
       "@types/*": ["types/*"],

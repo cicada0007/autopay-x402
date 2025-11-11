@@ -19,8 +19,10 @@
   },
   "dependencies": {
     "@prisma/client": "^5.7.1",
+    "@aws-sdk/client-secrets-manager": "^3.417.0",
     "axios": "^1.6.7",
     "bs58": "^5.0.0",
+    "date-fns": "^2.30.0",
     "cors": "^2.8.5",
     "dotenv": "^16.3.2",
     "express": "^4.18.2",

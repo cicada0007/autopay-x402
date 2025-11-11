@@ -3,9 +3,9 @@ import { Decimal } from '@prisma/client/runtime/library';
 import { prisma } from '@db/client';
 import { appendLedgerEntry } from '@utils/ledger';
 
-type PremiumEndpoint = 'market' | 'knowledge';
+export type PremiumEndpoint = 'market' | 'knowledge';
 
-interface PremiumOffering {
+export interface PremiumOffering {
   endpoint: PremiumEndpoint;
   amount: number;
   currency: 'USDC' | 'CASH';
@@ -171,6 +171,10 @@ export async function markRequestFailed(requestId: string, reason: string) {
 
 export async function getRequestById(requestId: string) {
   return prisma.agentRequest.findUnique({ where: { id: requestId } });
+}
+
+export function listPremiumOfferings(): PremiumOffering[] {
+  return Object.values(premiumCatalog);
 }
 
 function safeParseJson<T>(value: string | null): T | null {

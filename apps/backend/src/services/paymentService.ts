@@ -8,6 +8,8 @@ import { appendLedgerEntry } from '@utils/ledger';
 import { generateTxHash } from '@utils/signature';
 import { getActiveSession, incrementSessionUsage } from '@services/sessionService';
 import { facilitatorEnabled, submitFacilitatorVerification } from '@services/facilitatorService';
+import { ensurePaymentsActive, getBalanceSummary, ingestBalanceReading } from '@services/balanceService';
+import { emitEvent } from '@events/eventBus';
 
 export interface ExecutePaymentInput {
   requestId: string;
@@ -15,22 +17,15 @@ export interface ExecutePaymentInput {
 }
 
 const connection = new Connection(env.SOLANA_RPC_URL, 'confirmed');
-let simulatedBalance = 1.5;
 
-export async function getSimulatedBalance() {
-  const signer = getCustodialSigner();
-  if (signer) {
-    try {
-      const lamports = await connection.getBalance(signer.publicKey);
-      return lamports / LAMPORTS_PER_SOL;
-    } catch (_error) {
-      // ignore RPC errors and fall back to simulated balance
-    }
-  }
-  return simulatedBalance;
+async function getLatestBalanceValue() {
+  const summary = await getBalanceSummary();
+  return summary.balance;
 }
 
 export async function executePayment({ requestId, sessionId }: ExecutePaymentInput) {
+  await ensurePaymentsActive();
+
   const request = await prisma.agentRequest.findUnique({ where: { id: requestId } });
   if (!request) {
     throw Object.assign(new Error(`Request ${requestId} not found`), { status: 404 });
@@ -40,7 +35,7 @@ export async function executePayment({ requestId, sessionId }: ExecutePaymentInp
     return {
       status: 'already-fulfilled' as const,
       txHash: request.paymentHash,
-      balance: await getSimulatedBalance()
+      balance: await getLatestBalanceValue()
     };
   }
 
@@ -48,13 +43,18 @@ export async function executePayment({ requestId, sessionId }: ExecutePaymentInp
     return {
       status: 'noop' as const,
       txHash: request.paymentHash,
-      balance: await getSimulatedBalance()
+      balance: await getLatestBalanceValue()
     };
   }
 
   const signer = getCustodialSigner();
   if (!signer) {
-    return executeSimulatedPayment(request);
+    throw Object.assign(new Error('Custodial signer not configured'), {
+      status: 500,
+      details: {
+        message: 'Set PHANTOM_SESSION_PRIVATE_KEY to enable on-chain payments'
+      }
+    });
   }
 
   if (sessionId) {
@@ -120,6 +120,12 @@ export async function executePayment({ requestId, sessionId }: ExecutePaymentInp
     const balanceLamports = await connection.getBalance(signer.publicKey);
     const balance = balanceLamports / LAMPORTS_PER_SOL;
 
+    await ingestBalanceReading(balance, 'payment', {
+      requestId: payment.requestId,
+      paymentId: payment.id,
+      txHash: payment.txHash
+    });
+
     await appendLedgerEntry({
       timestamp: new Date().toISOString(),
       category: 'PAYMENT',
@@ -146,6 +152,19 @@ export async function executePayment({ requestId, sessionId }: ExecutePaymentInp
       });
     }
 
+    emitEvent({
+      type: 'payment-status',
+      payload: {
+        requestId: payment.requestId,
+        paymentId: payment.id,
+        txHash: payment.txHash,
+        status: 'CONFIRMED',
+        balance,
+        amount: Number(payment.amount),
+        currency: payment.currency
+      }
+    });
+
     return {
       status: 'confirmed' as const,
       txHash: payment.txHash,
@@ -163,7 +182,7 @@ export async function executePayment({ requestId, sessionId }: ExecutePaymentInp
       }
     });
 
-    await prisma.payment.create({
+    const failedPayment = await prisma.payment.create({
       data: {
         requestId: request.id,
         txHash: generateTxHash(),
@@ -171,6 +190,19 @@ export async function executePayment({ requestId, sessionId }: ExecutePaymentInp
         currency: request.currency,
         status: 'FAILED',
         failureCode: error instanceof Error ? error.message : 'unknown'
+      }
+    });
+
+    emitEvent({
+      type: 'payment-status',
+      payload: {
+        requestId: request.id,
+        paymentId: failedPayment.id,
+        txHash: failedPayment.txHash,
+        status: 'FAILED',
+        amount: Number(request.amount ?? 0),
+        currency: request.currency,
+        error: error instanceof Error ? error.message : 'unknown'
       }
     });
 
@@ -192,61 +224,3 @@ function getCustodialSigner(): Keypair | null {
     return null;
   }
 }
-
-async function executeSimulatedPayment(
-  request: NonNullable<Awaited<ReturnType<typeof prisma.agentRequest.findUnique>>>
-) {
-  const amount = Number(request.amount ?? 0);
-  if (simulatedBalance - amount < 0) {
-    await appendLedgerEntry({
-      timestamp: new Date().toISOString(),
-      category: 'BALANCE',
-      event: 'low-balance',
-      requestId: request.id,
-      metadata: { amount, balance: simulatedBalance, threshold: env.BALANCE_THRESHOLD }
-    });
-
-    throw Object.assign(new Error('Insufficient simulated balance for payment'), { status: 402 });
-  }
-
-  simulatedBalance = Math.max(0, simulatedBalance - amount);
-  const txHash = generateTxHash();
-
-  const payment = await prisma.payment.create({
-    data: {
-      requestId: request.id,
-      txHash,
-      amount: new Decimal(request.amount?.toString() ?? '0'),
-      currency: request.currency,
-      status: 'CONFIRMED',
-      confirmedAt: new Date()
-    }
-  });
-
-  await prisma.agentRequest.update({
-    where: { id: request.id },
-    data: { status: 'PAID', paymentHash: txHash }
-  });
-
-  await appendLedgerEntry({
-    timestamp: new Date().toISOString(),
-    category: 'PAYMENT',
-    event: 'simulated-confirmed',
-    requestId: payment.requestId,
-    paymentId: payment.id,
-    txHash: payment.txHash,
-    metadata: {
-      amount,
-      currency: payment.currency,
-      balance: simulatedBalance,
-      type: 'simulated'
-    }
-  });
-
-  return {
-    status: 'confirmed' as const,
-    txHash: payment.txHash,
-    balance: simulatedBalance
-  };
-}
-

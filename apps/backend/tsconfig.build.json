@@ -6,6 +6,6 @@
     "emitDeclarationOnly": false,
     "sourceMap": true
   },
-  "exclude": ["**/*.test.ts", "**/*.spec.ts", "tests/**/*"]
+  "exclude": ["**/*.test.ts", "**/*.spec.ts", "tests/**/*", "prisma/**/*"]
 }
 

@@ -15,6 +15,7 @@ const EnvSchema = z.object({
   PHANTOM_SESSION_PRIVATE_KEY: z.string().min(1).optional(),
   PHANTOM_SESSION_EXPIRY_SECONDS: z.coerce.number().default(3600),
   BALANCE_THRESHOLD: z.coerce.number().default(0.05),
+  BALANCE_POLL_INTERVAL_SECONDS: z.coerce.number().default(30),
   SESSION_MAX_SIGNATURES: z.coerce.number().default(3),
   SESSION_REFRESH_GRACE_SECONDS: z.coerce.number().default(300),
   PAYMENT_RECIPIENT_PUBLIC_KEY: z.string().default('FacilitatorRecipientDevnetKey'),
@@ -27,6 +28,14 @@ const EnvSchema = z.object({
     .default(
       `file:${path.relative(process.cwd(), path.resolve(process.cwd(), 'prisma/dev.db'))}`,
     ),
+  AUTONOMY_QUEUE_INTERVAL_SECONDS: z.coerce.number().default(20),
+  AUTONOMY_MIN_RUN_SCORE: z.coerce.number().default(0.5),
+  AUTONOMY_MAX_BACKOFF_SECONDS: z.coerce.number().default(900),
+  ALLOWED_ORIGINS: z.string().default('http://localhost:3000'),
+  ADMIN_API_KEY: z.string().min(12).default('dev-admin-key'),
+  SECRETS_PROVIDER: z.enum(['env', 'aws']).default('env'),
+  AWS_REGION: z.string().optional(),
+  AWS_SECRETS_MANAGER_SECRET_ID: z.string().optional()
 });
 
 export type AppEnv = z.infer<typeof EnvSchema>;

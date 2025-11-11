@@ -9,6 +9,7 @@ module.exports = {
     '^@middleware/(.*)$': '<rootDir>/src/middleware/$1',
     '^@services/(.*)$': '<rootDir>/src/services/$1',
     '^@routes/(.*)$': '<rootDir>/src/routes/$1',
+    '^@events/(.*)$': '<rootDir>/src/events/$1',
     '^@utils/(.*)$': '<rootDir>/src/utils/$1',
     '^@agent/(.*)$': '<rootDir>/src/agent/$1',
     '^@types/(.*)$': '<rootDir>/src/types/$1',

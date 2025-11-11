@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useEffect } from 'react';
+import { useEffect } from 'react';
+import { isAxiosError } from 'axios';
 
-import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast, Toaster } from 'react-hot-toast';
 
 import { AutonomySelector } from '@/components/AutonomySelector';
@@ -13,108 +13,225 @@ import { LedgerTimeline } from '@/components/LedgerTimeline';
 import { PaymentFlowVisualizer } from '@/components/PaymentFlowVisualizer';
 import { TransactionList } from '@/components/TransactionList';
 import { WalletConnectButton } from '@/components/WalletConnectButton';
+import { executePayment, requestPremiumData } from '@/lib/api';
 import {
-  executePayment,
-  fetchBalance,
-  fetchLedger,
-  fetchTransactions,
-  requestPremiumData
-} from '@/lib/api';
-import { useAgentStore, type LedgerEntry, type TransactionEntry } from '@/stores/useAgentStore';
+  useAgentStore,
+  type LedgerEntry,
+  type TransactionEntry,
+  type QueueTaskSummary,
+  type BalancePoint
+} from '@/stores/useAgentStore';
+import { QueueStatus } from '@/components/QueueStatus';
+import { MetricsPanel } from '@/components/MetricsPanel';
+import { BalanceHistoryChart } from '@/components/visualizations/BalanceHistoryChart';
 
 export default function DashboardPage() {
-  const queryClient = useQueryClient();
-  const { autonomyPhase, request, setRequest, setBalance, balance, ledger, setLedger, transactions, setTransactions } =
-    useAgentStore();
-
-  const { refetch: refreshBalance } = useQuery({
-    queryKey: ['balance'],
-    queryFn: fetchBalance,
-    enabled: false
-  });
-
-  const { refetch: refreshLedger } = useQuery({
-    queryKey: ['ledger'],
-    queryFn: fetchLedger,
-    enabled: false
-  });
-
-  const { refetch: refreshTransactions } = useQuery({
-    queryKey: ['transactions'],
-    queryFn: fetchTransactions,
-    enabled: false
-  });
-
-  const syncTelemetry = useCallback(async () => {
-    const [balanceResult, ledgerResult, transactionResult] = await Promise.all([
-      refreshBalance(),
-      refreshLedger(),
-      refreshTransactions()
-    ]);
-
-    const balanceValue =
-      typeof balanceResult.data === 'number' ? (balanceResult.data as number) : balance;
-    const ledgerEntries: LedgerEntry[] = Array.isArray(ledgerResult.data)
-      ? (ledgerResult.data as Array<Record<string, unknown>>).map((entry) => ({
-          timestamp: String(entry.timestamp ?? new Date().toISOString()),
-          category: String(entry.category ?? 'REQUEST'),
-          event: String(entry.event ?? 'ingested'),
-          requestId: entry.requestId ? String(entry.requestId) : undefined,
-          paymentId: entry.paymentId ? String(entry.paymentId) : undefined,
-          txHash: entry.txHash ? String(entry.txHash) : undefined,
-          metadata: (entry.metadata as Record<string, unknown> | undefined) ?? undefined
-        }))
-      : ledger;
-    const transactionEntries: TransactionEntry[] = Array.isArray(transactionResult.data)
-      ? (transactionResult.data as Array<Record<string, unknown>>).map((tx, index) => ({
-          id: String(tx.id ?? `tx-${index}`),
-          requestId: String(tx.requestId ?? ''),
-          txHash: String(tx.txHash ?? ''),
-          currency: String(tx.currency ?? 'USDC'),
-          amount: String(tx.amount ?? 0),
-          status: String(tx.status ?? 'PENDING'),
-          confirmedAt: tx.confirmedAt ? String(tx.confirmedAt) : null,
-          createdAt: String(tx.createdAt ?? new Date().toISOString())
-        }))
-      : transactions;
-
-    setBalance(balanceValue);
-    setLedger(ledgerEntries);
-    setTransactions(
-      transactionEntries.map((tx) => ({
-        id: String(tx.id),
-        requestId: String(tx.requestId),
-        txHash: String(tx.txHash),
-        currency: String(tx.currency),
-        amount: String(tx.amount),
-        status: String(tx.status),
-        confirmedAt: tx.confirmedAt ? String(tx.confirmedAt) : null,
-        createdAt: String(tx.createdAt)
-      }))
-    );
-  }, [
-    refreshBalance,
-    refreshLedger,
-    refreshTransactions,
-    setBalance,
-    setLedger,
-    setTransactions,
+  const {
+    autonomyPhase,
+    request,
+    setRequest,
+    setBalanceState,
     balance,
+    balanceStatus,
+    balanceThreshold,
+    paymentsPaused,
+    pauseReason,
+    balanceUpdatedAt,
     ledger,
-    transactions
-  ]);
+    setLedger,
+    transactions,
+    setTransactions,
+    queue,
+    setQueue,
+    balanceHistory,
+    setBalanceHistory
+  } = useAgentStore();
 
   useEffect(() => {
-    syncTelemetry().catch((error) => {
-      console.error('Failed to sync telemetry', error);
+    const adminToken = process.env.NEXT_PUBLIC_ADMIN_API_TOKEN;
+    const streamUrl = adminToken ? `/api/events/stream?token=${encodeURIComponent(adminToken)}` : '/api/events/stream';
+    const source = new EventSource(streamUrl);
+
+    const parseLedgerEntry = (entry: Record<string, unknown>): LedgerEntry => ({
+      timestamp: String(entry.timestamp ?? new Date().toISOString()),
+      category: String(entry.category ?? 'SYSTEM'),
+      event: String(entry.event ?? 'unknown'),
+      requestId: entry.requestId ? String(entry.requestId) : undefined,
+      paymentId: entry.paymentId ? String(entry.paymentId) : undefined,
+      txHash: entry.txHash ? String(entry.txHash) : undefined,
+      metadata: (entry.metadata as Record<string, unknown> | undefined) ?? undefined
     });
 
-    const interval = setInterval(() => {
-      syncTelemetry().catch(() => undefined);
-    }, 8000);
+    const parseTransaction = (tx: Record<string, unknown>): TransactionEntry => ({
+      id: String(tx.id ?? ''),
+      requestId: String(tx.requestId ?? ''),
+      txHash: String(tx.txHash ?? ''),
+      currency: String(tx.currency ?? 'USDC'),
+      amount: String(tx.amount ?? '0'),
+      status: String(tx.status ?? 'PENDING'),
+      confirmedAt: tx.confirmedAt ? String(tx.confirmedAt) : null,
+      createdAt: String(tx.createdAt ?? new Date().toISOString())
+    });
 
-    return () => clearInterval(interval);
-  }, [syncTelemetry]);
+    const parseBalancePoint = (point: Record<string, unknown>): BalancePoint => ({
+      timestamp: String(point.recordedAt ?? point.timestamp ?? new Date().toISOString()),
+      balance: Number(point.balance ?? 0),
+      status: (point.status ?? 'UNKNOWN') as BalancePoint['status']
+    });
+
+    const parseQueue = (tasks: Array<Record<string, unknown>>): QueueTaskSummary[] =>
+      tasks.map((task) => ({
+        id: String(task.id ?? ''),
+        endpoint: String(task.endpoint ?? ''),
+        status: String(task.status ?? 'IDLE'),
+        score: typeof task.score === 'number' ? task.score : Number(task.score ?? 0),
+        lastScore:
+          typeof task.lastScore === 'number'
+            ? task.lastScore
+            : task.lastScore != null
+              ? Number(task.lastScore)
+              : null,
+        lastRunAt: task.lastRunAt ? String(task.lastRunAt) : null,
+        lastSuccessAt: task.lastSuccessAt ? String(task.lastSuccessAt) : null,
+        failureCount: typeof task.failureCount === 'number' ? task.failureCount : Number(task.failureCount ?? 0),
+        nextRunAt: task.nextRunAt ? String(task.nextRunAt) : null,
+        lastError: task.lastError ? String(task.lastError) : null
+      }));
+
+    source.addEventListener('bootstrap', (event) => {
+      try {
+        const data = JSON.parse((event as MessageEvent<string>).data ?? '{}') as Record<string, unknown>;
+
+        const balancePayload = data.balance as Record<string, unknown> | undefined;
+        if (balancePayload) {
+          setBalanceState({
+            balance: Number(balancePayload.balance ?? 0),
+            status: (balancePayload.status ?? 'UNKNOWN') as BalancePoint['status'],
+            threshold: Number(balancePayload.threshold ?? 0),
+            paused: Boolean(balancePayload.paused),
+            pauseReason: (balancePayload.pauseReason as string | null | undefined) ?? null,
+            lastUpdated: balancePayload.lastUpdated ? String(balancePayload.lastUpdated) : null
+          });
+        }
+
+        const ledgerEntries = Array.isArray(data.ledger)
+          ? (data.ledger as Array<Record<string, unknown>>)
+              .map(parseLedgerEntry)
+              .reverse()
+          : [];
+        if (ledgerEntries.length) {
+          setLedger(ledgerEntries);
+        }
+
+        const payments = Array.isArray(data.payments)
+          ? (data.payments as Array<Record<string, unknown>>).map((tx) =>
+              parseTransaction({
+                ...tx,
+                amount: tx.amount != null ? String(tx.amount) : '0'
+              })
+            )
+          : [];
+        if (payments.length) {
+          setTransactions(payments);
+        }
+
+        const tasks = Array.isArray(data.queue)
+          ? parseQueue(data.queue as Array<Record<string, unknown>>)
+          : [];
+        if (tasks.length) {
+          setQueue(tasks);
+        }
+
+        const history = Array.isArray(data.balanceHistory)
+          ? (data.balanceHistory as Array<Record<string, unknown>>).map(parseBalancePoint)
+          : [];
+        if (history.length) {
+          setBalanceHistory(history);
+        }
+      } catch (error) {
+        console.error('Failed to process bootstrap event', error);
+      }
+    });
+
+    source.addEventListener('ledger-entry', (event) => {
+      try {
+        const data = JSON.parse((event as MessageEvent<string>).data ?? '{}') as Record<string, unknown>;
+        const entry = parseLedgerEntry(data);
+        setLedger((current) => [entry, ...current].slice(0, 120));
+      } catch (error) {
+        console.error('Failed to process ledger event', error);
+      }
+    });
+
+    source.addEventListener('balance-snapshot', (event) => {
+      try {
+        const data = JSON.parse((event as MessageEvent<string>).data ?? '{}') as Record<string, unknown>;
+        const point = parseBalancePoint(data);
+        const current = useAgentStore.getState();
+        setBalanceState({
+          balance: point.balance,
+          status: point.status,
+          threshold: data.threshold != null ? Number(data.threshold) : current.balanceThreshold,
+          paused: data.paused != null ? Boolean(data.paused) : current.paymentsPaused,
+          pauseReason:
+            data.pauseReason !== undefined
+              ? ((data.pauseReason as string | null | undefined) ?? null)
+              : current.pauseReason,
+          lastUpdated: point.timestamp
+        });
+        setBalanceHistory((history) => [...history.slice(-99), point]);
+      } catch (error) {
+        console.error('Failed to process balance event', error);
+      }
+    });
+
+    source.addEventListener('queue-update', (event) => {
+      try {
+        const data = JSON.parse((event as MessageEvent<string>).data ?? '{}') as { tasks?: Array<Record<string, unknown>> };
+        if (Array.isArray(data.tasks)) {
+          setQueue(parseQueue(data.tasks));
+        }
+      } catch (error) {
+        console.error('Failed to process queue event', error);
+      }
+    });
+
+    source.addEventListener('payment-status', (event) => {
+      try {
+        const data = JSON.parse((event as MessageEvent<string>).data ?? '{}') as Record<string, unknown>;
+        const transaction = parseTransaction({
+          id: data.paymentId,
+          requestId: data.requestId,
+          txHash: data.txHash,
+          currency: data.currency ?? 'USDC',
+          amount: data.amount != null ? String(data.amount) : '0',
+          status: data.status ?? 'PENDING',
+          confirmedAt: data.status === 'CONFIRMED' ? new Date().toISOString() : null,
+          createdAt: new Date().toISOString()
+        });
+
+        setTransactions((current) => {
+          const existingIndex = current.findIndex((item) => item.id === transaction.id);
+          if (existingIndex >= 0) {
+            const updated = [...current];
+            updated[existingIndex] = { ...updated[existingIndex], ...transaction };
+            return updated;
+          }
+          return [transaction, ...current].slice(0, 50);
+        });
+      } catch (error) {
+        console.error('Failed to process payment event', error);
+      }
+    });
+
+    source.onerror = (error) => {
+      console.error('Event stream error', error);
+    };
+
+    return () => {
+      source.close();
+    };
+  }, [setBalanceState, setLedger, setTransactions, setQueue, setBalanceHistory]);
 
   const handleRequest = async (endpoint: 'market' | 'knowledge') => {
     setRequest({ endpoint, status: 'idle' });
@@ -130,7 +247,6 @@ export default function DashboardPage() {
           data: outcome.data.data
         });
         toast.success('Premium data unlocked');
-        syncTelemetry().catch(() => undefined);
       } else {
         setRequest({
           endpoint,
@@ -141,7 +257,13 @@ export default function DashboardPage() {
         toast('Payment required', { icon: '💳' });
 
         if (autonomyPhase === 3) {
-          await handlePayment(outcome.instructions.requestId);
+          if (paymentsPaused) {
+            toast.error(
+              pauseReason ? `Payments paused: ${pauseReason}` : 'Payments paused due to low balance'
+            );
+          } else {
+            await handlePayment(outcome.instructions.requestId);
+          }
         }
       }
     } catch (error) {
@@ -157,6 +279,12 @@ export default function DashboardPage() {
 
   const handlePayment = async (requestId: string | undefined) => {
     if (!requestId) return;
+    if (paymentsPaused) {
+      toast.error(
+        pauseReason ? `Payments paused: ${pauseReason}` : 'Payments paused due to low balance'
+      );
+      return;
+    }
 
     setRequest((current) =>
       current
@@ -170,7 +298,6 @@ export default function DashboardPage() {
 
     try {
       const result = await executePayment(requestId);
-      setBalance(result.balance);
       if (result.txHash) {
         toast.success('Payment confirmed on Devnet');
       } else {
@@ -189,20 +316,32 @@ export default function DashboardPage() {
       }
     } catch (error) {
       console.error(error);
-      toast.error('Payment failed');
-      setRequest((current) =>
-        current
-          ? {
-              ...current,
-              status: 'error',
-              error: error instanceof Error ? error.message : 'Payment failed'
-            }
-          : null
-      );
-    } finally {
-      queryClient.invalidateQueries({ queryKey: ['transactions'] }).catch(() => undefined);
-      queryClient.invalidateQueries({ queryKey: ['ledger'] }).catch(() => undefined);
-      syncTelemetry().catch(() => undefined);
+      if (isAxiosError(error) && error.response?.status === 503) {
+        const responseBody = error.response.data as { message?: string; details?: { pauseReason?: string } } | undefined;
+        const reason = responseBody?.details?.pauseReason;
+        const message = responseBody?.message ?? 'Payments paused';
+        toast.error(reason ? `${message}: ${reason}` : message);
+        setRequest((current) =>
+          current
+            ? {
+                ...current,
+                status: 'error',
+                error: reason ?? message
+              }
+            : null
+        );
+      } else {
+        toast.error('Payment failed');
+        setRequest((current) =>
+          current
+            ? {
+                ...current,
+                status: 'error',
+                error: error instanceof Error ? error.message : 'Payment failed'
+              }
+            : null
+        );
+      }
     }
   };
 
@@ -239,20 +378,44 @@ export default function DashboardPage() {
                   <Button
                     variant="success"
                     onClick={() => handlePayment(request.requestId)}
-                    disabled={request.status !== 'payment-required'}
+                    disabled={request.status !== 'payment-required' || paymentsPaused}
                   >
                     Execute Payment
                   </Button>
                 )}
               </div>
+              {paymentsPaused && (
+                <p className="text-xs text-red-400">
+                  Payments paused{pauseReason ? `: ${pauseReason}` : ' due to low balance'}
+                </p>
+              )}
             }
           >
             <PaymentFlowVisualizer state={request} />
           </Card>
 
           <div className="space-y-6">
-            <Card title="Wallet Health" description="Simulated Devnet balance">
-              <BalanceMonitor balance={balance} threshold={0.05} />
+            <Card title="Wallet Health" description="Solana Devnet wallet status">
+              <BalanceMonitor
+                balance={balance}
+                threshold={balanceThreshold}
+                status={balanceStatus}
+                paused={paymentsPaused}
+                pauseReason={pauseReason}
+                lastUpdated={balanceUpdatedAt}
+              />
+            </Card>
+
+            <Card title="Balance History" description="Recent wallet snapshots streamed from the backend">
+              <BalanceHistoryChart points={balanceHistory} threshold={balanceThreshold} />
+            </Card>
+
+            <Card title="Autonomy Metrics" description="Queue depth, payment health, facilitator outcomes">
+              <MetricsPanel queue={queue} transactions={transactions} ledger={ledger} />
+            </Card>
+
+            <Card title="Autonomy Queue" description="Scheduler health and prioritization">
+              <QueueStatus tasks={queue} />
             </Card>
 
             <Card title="Recent Payments" description="Solana Devnet transaction history">

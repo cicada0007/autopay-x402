@@ -39,6 +39,53 @@ model Payment {
   auditLogs   AuditLog[]
 }
 
+model BalanceSnapshot {
+  id         String   @id @default(cuid())
+  balance    Decimal
+  status     String   @default("UNKNOWN")
+  source     String   @default("poller")
+  metadata   String?
+  recordedAt DateTime @default(now())
+}
+
+model SystemState {
+  id             Int      @id @default(1)
+  paymentsPaused Boolean  @default(false)
+  pauseReason    String?
+  updatedAt      DateTime @updatedAt
+}
+
+model AutonomyTask {
+  id               String   @id @default(cuid())
+  endpoint         String   @unique
+  status           String   @default("IDLE")
+  valueScore       Float
+  cost             Float
+  freshnessSeconds Int      @default(300)
+  backoffSeconds   Int      @default(30)
+  lastScore        Float?
+  lastRunAt        DateTime?
+  lastSuccessAt    DateTime?
+  failureCount     Int      @default(0)
+  nextRunAt        DateTime?
+  lockedAt         DateTime?
+  lastError        String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model LedgerEvent {
+  id         String   @id @default(cuid())
+  timestamp  DateTime @default(now())
+  category   String
+  event      String
+  requestId  String?
+  paymentId  String?
+  txHash     String?
+  metadata   String?
+  createdAt  DateTime @default(now())
+}
+
 model AuditLog {
   id         String   @id @default(cuid())
   category   String
