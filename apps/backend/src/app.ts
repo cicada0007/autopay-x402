@@ -9,6 +9,7 @@ import agentRoutes from '@routes/agentRoutes';
 import healthRoutes from '@routes/healthRoutes';
 import logRoutes from '@routes/logRoutes';
 import paymentRoutes from '@routes/paymentRoutes';
+import sessionRoutes from '@routes/sessionRoutes';
 
 const app = express();
 
@@ -30,6 +31,7 @@ app.use('/health', healthRoutes);
 app.use('/api/agent', agentRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/logs', logRoutes);
+app.use('/api/sessions', sessionRoutes);
 
 app.use(errorHandler);
 

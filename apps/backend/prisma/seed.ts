@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 async function main() {
+  await prisma.session.deleteMany();
   await prisma.agentRequest.deleteMany();
   await prisma.payment.deleteMany();
   await prisma.auditLog.deleteMany();
